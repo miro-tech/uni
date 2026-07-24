@@ -7,7 +7,7 @@ on:
     - cron: "0 8,20 * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   update:
@@ -20,19 +20,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - run: pip install requests
-
-      - run: python parser.py
-
-      - name: Commit
+      - name: Install dependencies
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          pip install requests
 
-          git add profiles.txt
+      - name: Run parser
+        run: |
+          python parser.py
 
-          git diff --cached --quiet && exit 0
-
-          git commit -m "Update profiles"
-
-          git push
+      - name: Upload to Gist
+        env:
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          python update.py
