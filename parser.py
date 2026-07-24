@@ -11,9 +11,9 @@ import requests
 BASE_URL = "https://bos.tg"
 
 # --- НАСТРОЙКИ GITHUB (через переменные окружения / секреты) ---
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+MY_TOKEN = os.getenv("MY_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
-GIST_FILENAME = "BoSVPN_Telegram_RE_s_B.txt"
+GIST_FILENAME = "bosvpn.txt"
 GIST_DESCRIPTION = "Auto-updated BoSVPN configs"
 # -------------------------------------------------------------
 
