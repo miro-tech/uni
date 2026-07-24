@@ -85,7 +85,7 @@ def save_to_gist(content):
     return
 
   headers = {
-      "Authorization": f"token {GITHUB_TOKEN}",
+      "Authorization": f"token {MY_TOKEN}",
       "Accept": "application/vnd.github.v3+json",
   }
 
