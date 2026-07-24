@@ -25,12 +25,8 @@ jobs:
           pip install requests
 
       - name: Run parser
+        env:
+          MY_TOKEN: ${{ secrets.MY_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
         run: |
           python parser.py
-
-      - name: Upload to Gist
-        env:
-          GIST_ID: ${{ secrets.GIST_ID }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-        run: |
-          python update.py
