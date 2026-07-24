@@ -80,7 +80,7 @@ def process_configs(raw_text):
 
 def save_to_gist(content):
   """Сохраняет или обновляет Gist на GitHub"""
-  if not GITHUB_TOKEN:
+  if not MY_TOKEN:
     print("[-] Ошибка: Переменная окружения GITHUB_TOKEN не задана!")
     return
 
