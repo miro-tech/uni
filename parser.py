@@ -169,14 +169,15 @@ def main():
     print("[-] Ошибка декодирования:", e)
     return
 
-  processed_lines = process_configs(configs_raw)
+    processed_lines = process_configs(configs_raw)
   final_content = "\n".join(processed_lines)
 
   count = sum(1 for line in processed_lines if line.startswith("vless://"))
   print(f"[+] Обработано серверов: {count}")
 
+  with open("configs.txt", "w", encoding="utf-8") as f:
+      f.write(final_content)
+
+  print("[+] configs.txt сохранён")
+
   save_to_gist(final_content)
-
-
-if __name__ == "__main__":
-  main()
