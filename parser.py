@@ -4,20 +4,18 @@ import random
 import re
 import socket
 import string
-import uuid
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
+import uuid
 import requests
-
 
 BASE_URL = "https://bos.tg"
 
-# GitHub Gist
+# --- НАСТРОЙКИ GITHUB (через переменные окружения / секреты) ---
 MY_TOKEN = os.getenv("MY_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
 GIST_FILENAME = "bosvpn.txt"
 GIST_DESCRIPTION = "Auto-updated BoSVPN configs"
-
+# -------------------------------------------------------------
 
 REMOVE_ALPN = {
     "h2",
@@ -28,13 +26,7 @@ REMOVE_ALPN = {
 
 
 def process_configs(raw_text):
-    """
-    Обрабатывает VLESS-конфигурации:
-    - DNS hostname -> IPv4
-    - удаляет определённые ALPN
-    - заменяет SNI на rbc.ru
-    """
-
+    """Обрабатывает VLESS конфигурации (DNS резолв, замена SNI, фильтрация ALPN)"""
     cache = {}
     lines = raw_text.splitlines()
     result = []
@@ -42,97 +34,60 @@ def process_configs(raw_text):
     for line in lines:
         line = line.strip()
 
-        if not line:
-            continue
-
         if not line.startswith("vless://"):
             result.append(line)
             continue
 
-        try:
-            parts = urlsplit(line)
-            netloc = parts.netloc
+        parts = urlsplit(line)
+        netloc = parts.netloc
+        m = re.match(r"(.+@)([^:]+)(:\d+)", netloc)
 
-            match = re.match(r"(.+@)([^:]+)(:\d+)", netloc)
+        if m:
+            prefix, host, port = m.groups()
 
-            if match:
-                prefix, host, port = match.groups()
+            if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
+                if host not in cache:
+                    try:
+                        cache[host] = socket.gethostbyname(host)
+                        print(f"[DNS] {host} -> {cache[host]}")
+                    except Exception:
+                        cache[host] = host
 
-                # Если host не IPv4
-                if not re.fullmatch(
-                    r"\d{1,3}(?:\.\d{1,3}){3}",
-                    host
-                ):
-                    if host not in cache:
-                        try:
-                            cache[host] = socket.gethostbyname(host)
-                            print(
-                                f"[DNS] {host} -> {cache[host]}"
-                            )
-                        except Exception:
-                            print(
-                                f"[DNS] Не удалось разрешить {host}"
-                            )
-                            cache[host] = host
+                netloc = prefix + cache[host] + port
 
-                    netloc = prefix + cache[host] + port
+        params = parse_qsl(parts.query, keep_blank_values=True)
+        new_params = []
 
-            params = parse_qsl(
-                parts.query,
-                keep_blank_values=True
+        for k, v in params:
+            if k == "alpn" and v in REMOVE_ALPN:
+                continue
+
+            if k == "sni":
+                v = "rbc.ru"
+
+            new_params.append((k, v))
+
+        new_query = urlencode(new_params)
+
+        result.append(
+            urlunsplit(
+                (parts.scheme, netloc, parts.path, new_query, parts.fragment)
             )
-
-            new_params = []
-
-            for key, value in params:
-
-                # Удаляем ALPN
-                if key == "alpn" and value in REMOVE_ALPN:
-                    continue
-
-                # Меняем SNI
-                if key == "sni":
-                    value = "rbc.ru"
-
-                new_params.append((key, value))
-
-            new_query = urlencode(new_params)
-
-            new_link = urlunsplit(
-                (
-                    parts.scheme,
-                    netloc,
-                    parts.path,
-                    new_query,
-                    parts.fragment,
-                )
-            )
-
-            result.append(new_link)
-
-        except Exception as e:
-            print(f"[-] Ошибка обработки строки: {e}")
-
-            # Не теряем исходную строку
-            result.append(line)
+        )
 
     return result
 
 
 def save_to_gist(content):
-    """Создаёт или обновляет GitHub Gist."""
+    """Сохраняет или обновляет Gist на GitHub"""
 
     if not MY_TOKEN:
-        print(
-            "[-] Ошибка: переменная окружения MY_TOKEN "
-            "не задана!"
-        )
-        return False
+        print("[-] Ошибка: Переменная окружения MY_TOKEN не задана!")
+        return
 
     headers = {
         "Authorization": f"token {MY_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
     }
 
     payload = {
@@ -145,59 +100,44 @@ def save_to_gist(content):
         },
     }
 
-    try:
-        if GIST_ID:
-            url = f"https://api.github.com/gists/{GIST_ID}"
+    if GIST_ID:
+        url = f"https://api.github.com/gists/{GIST_ID}"
+        resp = requests.patch(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+    else:
+        url = "https://api.github.com/gists"
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
 
-            response = requests.patch(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
-        else:
-            url = "https://api.github.com/gists"
+    if resp.status_code in [200, 201]:
+        data = resp.json()
 
-            response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
+        print("\n[+] Успешно сохранено в Gist!")
+        print(f"[+] Ссылка на Gist: {data.get('html_url')}")
 
-    except requests.RequestException as e:
-        print(f"[-] Ошибка GitHub API: {e}")
-        return False
-
-    if response.status_code in (200, 201):
-        data = response.json()
-
-        print("[+] Gist успешно сохранён!")
-
-        if data.get("html_url"):
-            print(f"[+] Gist: {data['html_url']}")
-
-        if not GIST_ID and data.get("id"):
+        if not GIST_ID:
             print(
-                f"[!] Новый GIST_ID: {data['id']}"
+                f"[!] Сохраните этот Gist ID для будущих обновлений: "
+                f"{data.get('id')}"
             )
 
-        return True
-
-    print(
-        f"[-] Ошибка сохранения Gist: "
-        f"HTTP {response.status_code}"
-    )
-    print(response.text)
-
-    return False
+    else:
+        print(
+            f"[-] Ошибка при сохранении Gist: "
+            f"{resp.status_code}"
+        )
+        print(resp.text)
 
 
 def main():
-
-    print("=" * 60)
-    print("BoSVPN config updater")
-    print("=" * 60)
 
     session = requests.Session()
 
@@ -208,15 +148,11 @@ def main():
         }
     )
 
-    # ---------------------------------------------------------
-    # Генерируем данные клиента
-    # ---------------------------------------------------------
-
     email = (
         "".join(
             random.choices(
                 string.ascii_lowercase + string.digits,
-                k=10,
+                k=10
             )
         )
         + "@gmail.com"
@@ -225,162 +161,127 @@ def main():
     client_id = str(uuid.uuid4())
     hwid = str(uuid.uuid4())
 
-    print(f"[*] Email: {email}")
-    print(f"[*] HWID: {hwid}")
+    print("[*] Email:", email)
+    print("[*] HWID:", hwid)
 
     # ---------------------------------------------------------
-    # Login
+    # LOGIN
     # ---------------------------------------------------------
 
-    try:
-        response = session.post(
-            f"{BASE_URL}/api/auth/login",
-            json={
-                "email": email,
-                "clientId": client_id,
-                "hwid": hwid,
-            },
-            timeout=30,
-        )
-    except requests.RequestException as e:
-        print(f"[-] Ошибка login: {e}")
-        return 1
-
-    print(
-        f"[*] Login HTTP: {response.status_code}"
+    resp = session.post(
+        f"{BASE_URL}/api/auth/login",
+        json={
+            "email": email,
+            "clientId": client_id,
+            "hwid": hwid,
+        },
+        timeout=30,
     )
 
-    if response.status_code != 200:
-        print("[-] Ошибка авторизации:")
-        print(response.text)
-        return 1
+    if resp.status_code != 200:
+        print("[-] Ошибка HTTP:", resp.status_code)
+        print(resp.text)
+        return
 
-    try:
-        data = response.json()
-    except ValueError:
-        print("[-] Login вернул не JSON:")
-        print(response.text[:1000])
-        return 1
+    data = resp.json()
 
     if "accessToken" not in data:
-        print("[-] accessToken отсутствует")
+        print("[-] Ошибка авторизации")
         print(data)
-        return 1
+        return
 
     # ---------------------------------------------------------
-    # Получаем subscription URL
+    # SUBSCRIPTION
     # ---------------------------------------------------------
 
-    try:
-        sub_api_url = (
-            data["user"]
-            ["access"]
-            ["premium"]
-            ["subscriptionUrl"]
-        )
-    except (KeyError, TypeError):
-        print(
-            "[-] Не найден subscriptionUrl"
-        )
-        print(data)
-        return 1
-
-    print(
-        f"[+] Subscription URL: {sub_api_url}"
+    sub_api_url = (
+        data["user"]
+        ["access"]
+        ["premium"]
+        ["subscriptionUrl"]
     )
 
-    # Извлекаем ID подписки
-    try:
-        sub_id = sub_api_url.rstrip("/").split("/")[-1]
-    except Exception as e:
+    print("[+] Subscription URL получен:")
+    print(sub_api_url)
+
+    # URL имеет вид:
+    #
+    # https://321abc.bosvpn.com/api/sub/ID/v2ray-json
+    #
+    # Нам нужен именно элемент после /sub/
+    #
+    match = re.search(
+        r"/api/sub/([^/]+)/",
+        sub_api_url
+    )
+
+    if not match:
         print(
-            f"[-] Не удалось получить subscription ID: {e}"
+            "[-] Не удалось извлечь ID подписки из URL"
         )
-        return 1
+        return
+
+    sub_id = match.group(1)
 
     real_sub_url = (
         f"https://access.bosx.net/subb/{sub_id}"
     )
 
     print(
-        f"[+] Subscription endpoint: {real_sub_url}"
+        "[+] Subscription endpoint:",
+        real_sub_url
     )
 
     # ---------------------------------------------------------
-    # Получаем конфигурации
+    # CONFIGS
     # ---------------------------------------------------------
 
-    try:
-        config_response = session.get(
-            real_sub_url,
-            headers={
-                "User-Agent": "okhttp/4.12.0",
-                "X-HWID": hwid,
-            },
-            timeout=30,
-        )
-    except requests.RequestException as e:
-        print(
-            f"[-] Ошибка получения конфигураций: {e}"
-        )
-        return 1
+    config_resp = session.get(
+        real_sub_url,
+        headers={
+            "User-Agent": "okhttp/4.12.0",
+            "X-HWID": hwid,
+        },
+        timeout=30,
+    )
 
     print(
-        f"[*] Subscription HTTP: "
-        f"{config_response.status_code}"
+        "[*] Subscription HTTP:",
+        config_resp.status_code
     )
 
-    if config_response.status_code != 200:
+    if config_resp.headers.get("X-Hwid-Not-Supported"):
+        print("[-] HWID не принят")
+        return
+
+    if config_resp.status_code != 200:
         print(
             "[-] Сервер подписки вернул ошибку:"
         )
-        print(config_response.text[:2000])
-        return 1
-
-    if config_response.headers.get(
-        "X-Hwid-Not-Supported"
-    ):
-        print("[-] HWID не принят")
-        return 1
+        print(config_resp.text[:2000])
+        return
 
     # ---------------------------------------------------------
-    # Base64 decode
+    # BASE64
     # ---------------------------------------------------------
-
-    encoded = config_response.text.strip()
-
-    if not encoded:
-        print("[-] Ответ подписки пустой")
-        return 1
 
     try:
         configs_raw = base64.b64decode(
-            encoded
+            config_resp.text.strip()
         ).decode(
             "utf-8",
-            errors="ignore",
+            errors="ignore"
         )
 
     except Exception as e:
         print(
-            f"[-] Ошибка Base64 decode: {e}"
+            "[-] Ошибка декодирования:",
+            e
         )
-        return 1
-
-    if not configs_raw.strip():
-        print(
-            "[-] После Base64 decode "
-            "конфигурации пустые"
-        )
-        return 1
-
-    print(
-        f"[+] Получено данных: "
-        f"{len(configs_raw)} байт"
-    )
+        return
 
     # ---------------------------------------------------------
-    # Обработка конфигураций
+    # PROCESS
     # ---------------------------------------------------------
 
     processed_lines = process_configs(
@@ -391,10 +292,6 @@ def main():
         processed_lines
     )
 
-    # Добавляем завершающий перенос строки
-    if final_content:
-        final_content += "\n"
-
     count = sum(
         1
         for line in processed_lines
@@ -402,68 +299,32 @@ def main():
     )
 
     print(
-        f"[+] Обработано VLESS серверов: {count}"
+        f"[+] Обработано серверов: {count}"
     )
 
     # ---------------------------------------------------------
-    # Сохраняем локальный configs.txt
+    # LOCAL FILE
     # ---------------------------------------------------------
 
-    try:
-        with open(
-            "configs.txt",
-            "w",
-            encoding="utf-8",
-        ) as file:
-            file.write(final_content)
-
-    except OSError as e:
-        print(
-            f"[-] Не удалось создать configs.txt: {e}"
-        )
-        return 1
+    with open(
+        "configs.txt",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        f.write(final_content)
 
     print(
-        "[+] configs.txt успешно сохранён"
+        "[+] configs.txt сохранён"
     )
 
-    # Проверка файла
-    try:
-        file_size = os.path.getsize(
-            "configs.txt"
-        )
-
-        print(
-            f"[+] Размер configs.txt: "
-            f"{file_size} байт"
-        )
-
-    except OSError:
-        print(
-            "[-] Не удалось проверить configs.txt"
-        )
-        return 1
-
-    if file_size == 0:
-        print(
-            "[-] configs.txt пустой"
-        )
-        return 1
-
     # ---------------------------------------------------------
-    # GitHub Gist
+    # GIST
     # ---------------------------------------------------------
 
     save_to_gist(
         final_content
     )
 
-    print("=" * 60)
-    print("Готово")
-    print("=" * 60)
-
-    return 0
-
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()
