@@ -16,10 +16,10 @@ jobs:
     steps:
 
       # ======================================================
-      # CHECKOUT GITHUB REPOSITORY
+      # CHECKOUT
       # ======================================================
 
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
 
@@ -58,22 +58,27 @@ jobs:
 
           python parser.py
 
-          echo ""
+
+      # ======================================================
+      # CHECK OUTPUT
+      # ======================================================
+
+      - name: Check configs.txt
+        run: |
           echo "========================================"
-          echo "Checking configs.txt"
+          echo "Checking configs.txt..."
           echo "========================================"
 
           if [ ! -f configs.txt ]; then
+            echo ""
             echo "ERROR: configs.txt was not created!"
             echo ""
-            echo "Current directory:"
-            pwd
-            echo ""
-            echo "Files:"
-            find . -maxdepth 3 -type f -print
+            echo "Files in workspace:"
+            find . -maxdepth 3 -type f | sort
             exit 1
           fi
 
+          echo ""
           echo "[+] configs.txt exists"
 
           echo ""
@@ -86,7 +91,7 @@ jobs:
 
           echo ""
           echo "First configs:"
-          head -20 configs.txt
+          head -n 10 configs.txt
 
 
       # ======================================================
@@ -100,53 +105,33 @@ jobs:
         run: |
 
           echo "========================================"
-          echo "Checking GitVerse credentials"
+          echo "GitVerse update"
           echo "========================================"
 
-          if [ -z "$GV_USER" ]; then
-            echo "ERROR: GV_USER is empty!"
+          if [ ! -f configs.txt ]; then
+            echo "ERROR: configs.txt missing"
             exit 1
           fi
 
-          if [ -z "$GV_TOKEN" ]; then
-            echo "ERROR: GV_TOKEN is empty!"
-            exit 1
-          fi
-
-
-          echo "========================================"
-          echo "Cloning GitVerse repository"
-          echo "========================================"
-
-          rm -rf gitverse
+          echo "[*] Cloning GitVerse..."
 
           git clone \
             "https://${GV_USER}:${GV_TOKEN}@gitverse.ru/mirgittech/bos.git" \
             gitverse
 
+          echo "[+] GitVerse cloned"
 
-          echo "========================================"
-          echo "Copying configs.txt"
-          echo "========================================"
+          echo "[*] Copying configs.txt..."
 
-          cp \
-            configs.txt \
-            gitverse/configs.txt
-
-
-          echo "========================================"
-          echo "Git status"
-          echo "========================================"
+          cp configs.txt gitverse/configs.txt
 
           cd gitverse
 
-          git status
+          echo "[+] configs.txt copied"
 
           echo ""
-          echo "configs.txt:"
-          wc -c configs.txt
-          wc -l configs.txt
-
+          echo "Git status:"
+          git status --short
 
           # ==================================================
           # GIT CONFIG
@@ -154,7 +139,6 @@ jobs:
 
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-
 
           # ==================================================
           # COMMIT
@@ -164,25 +148,22 @@ jobs:
 
           if git diff --cached --quiet; then
             echo ""
-            echo "[+] configs.txt не изменился"
-            echo "[+] Новый commit не требуется"
+            echo "[+] No changes in configs.txt"
+            echo "[+] Nothing to commit"
             exit 0
           fi
 
           git commit \
             -m "Auto update configs $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
-
           # ==================================================
           # PUSH
           # ==================================================
 
           echo ""
-          echo "========================================"
-          echo "Pushing to GitVerse"
-          echo "========================================"
+          echo "[*] Pushing to GitVerse..."
 
           git push origin master
 
           echo ""
-          echo "[+] GitVerse успешно обновлён"
+          echo "[+] GitVerse successfully updated"
