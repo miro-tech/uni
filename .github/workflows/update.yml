@@ -15,17 +15,17 @@ jobs:
 
     steps:
 
-      # -----------------------------------------
-      # CHECKOUT
-      # -----------------------------------------
+      # ======================================================
+      # CHECKOUT GITHUB REPOSITORY
+      # ======================================================
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
 
-      # -----------------------------------------
+      # ======================================================
       # PYTHON
-      # -----------------------------------------
+      # ======================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -33,9 +33,9 @@ jobs:
           python-version: "3.12"
 
 
-      # -----------------------------------------
+      # ======================================================
       # DEPENDENCIES
-      # -----------------------------------------
+      # ======================================================
 
       - name: Install dependencies
         run: |
@@ -43,9 +43,9 @@ jobs:
           pip install requests
 
 
-      # -----------------------------------------
+      # ======================================================
       # RUN PARSER
-      # -----------------------------------------
+      # ======================================================
 
       - name: Run parser
         env:
@@ -53,68 +53,45 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
         run: |
           echo "========================================"
-          echo "RUNNING PARSER"
+          echo "Running parser.py"
           echo "========================================"
 
           python parser.py
 
           echo ""
           echo "========================================"
-          echo "CURRENT DIRECTORY"
+          echo "Checking configs.txt"
           echo "========================================"
-
-          pwd
-          ls -lah
-
-          echo ""
-          echo "========================================"
-          echo "SEARCH configs.txt"
-          echo "========================================"
-
-          find . -maxdepth 3 -type f -name "configs.txt" -print
-
-
-      # -----------------------------------------
-      # CHECK CONFIG FILE
-      # -----------------------------------------
-
-      - name: Check configs.txt
-        run: |
-          echo "Checking configs.txt..."
 
           if [ ! -f configs.txt ]; then
-            echo ""
             echo "ERROR: configs.txt was not created!"
             echo ""
-            echo "Files in workspace:"
+            echo "Current directory:"
+            pwd
+            echo ""
+            echo "Files:"
             find . -maxdepth 3 -type f -print
             exit 1
           fi
 
-          echo ""
           echo "[+] configs.txt exists"
-          echo "[+] Size:"
+
+          echo ""
+          echo "Size:"
           wc -c configs.txt
 
           echo ""
-          echo "[+] Number of VLESS:"
-          grep -c '^vless://' configs.txt || true
+          echo "Lines:"
+          wc -l configs.txt
 
           echo ""
-          echo "[+] Number of Hysteria2:"
-          grep -c '^hysteria2://' configs.txt || true
-
-          echo ""
-          echo "========================================"
-          echo "CONFIGS PREVIEW"
-          echo "========================================"
-
-          cat configs.txt
+          echo "First configs:"
+          head -20 configs.txt
 
 
-      # -----------------------------------------
+      # ======================================================
       # GITVERSE
-      # -----------------------------------------
+      # ======================================================
 
       - name: Push configs to GitVerse
         env:
@@ -123,48 +100,89 @@ jobs:
         run: |
 
           echo "========================================"
-          echo "CLONING GITVERSE"
+          echo "Checking GitVerse credentials"
           echo "========================================"
+
+          if [ -z "$GV_USER" ]; then
+            echo "ERROR: GV_USER is empty!"
+            exit 1
+          fi
+
+          if [ -z "$GV_TOKEN" ]; then
+            echo "ERROR: GV_TOKEN is empty!"
+            exit 1
+          fi
+
+
+          echo "========================================"
+          echo "Cloning GitVerse repository"
+          echo "========================================"
+
+          rm -rf gitverse
 
           git clone \
             "https://${GV_USER}:${GV_TOKEN}@gitverse.ru/mirgittech/bos.git" \
             gitverse
 
-          echo "[+] GitVerse cloned"
 
-
-          echo ""
           echo "========================================"
-          echo "COPY CONFIGS"
+          echo "Copying configs.txt"
           echo "========================================"
 
-          cp configs.txt gitverse/configs.txt
+          cp \
+            configs.txt \
+            gitverse/configs.txt
 
-          echo "[+] configs.txt copied"
 
-
-          echo ""
           echo "========================================"
-          echo "COMMIT"
+          echo "Git status"
           echo "========================================"
 
           cd gitverse
 
+          git status
+
+          echo ""
+          echo "configs.txt:"
+          wc -c configs.txt
+          wc -l configs.txt
+
+
+          # ==================================================
+          # GIT CONFIG
+          # ==================================================
+
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
+
+          # ==================================================
+          # COMMIT
+          # ==================================================
+
           git add configs.txt
 
-          git commit \
-            -m "Auto update configs $(date '+%Y-%m-%d %H:%M:%S')" \
-            || echo "[*] Nothing to commit"
+          if git diff --cached --quiet; then
+            echo ""
+            echo "[+] configs.txt не изменился"
+            echo "[+] Новый commit не требуется"
+            exit 0
+          fi
 
+          git commit \
+            -m "Auto update configs $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+
+          # ==================================================
+          # PUSH
+          # ==================================================
 
           echo ""
           echo "========================================"
-          echo "PUSH"
+          echo "Pushing to GitVerse"
           echo "========================================"
 
           git push origin master
 
-          echo "[+] GitVerse updated successfully"
+          echo ""
+          echo "[+] GitVerse успешно обновлён"
