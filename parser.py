@@ -1,22 +1,42 @@
+#!/usr/bin/env python3
+
 import base64
+import json
 import os
 import random
 import re
 import socket
 import string
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uuid
+
+from urllib.parse import (
+    parse_qsl,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+    quote
+)
+
 import requests
+
+
+# ============================================================
+# CONFIG
+# ============================================================
 
 BASE_URL = "https://bos.tg"
 
-# --- НАСТРОЙКИ GITHUB (через переменные окружения / секреты) ---
 MY_TOKEN = os.getenv("MY_TOKEN")
 GIST_ID = os.getenv("GIST_ID")
+
 GIST_FILENAME = "bosvpn.txt"
 GIST_DESCRIPTION = "Auto-updated BoSVPN configs"
-# -------------------------------------------------------------
 
+OUTPUT_FILE = "configs.txt"
+
+SNI = "rbc.ru"
+
+# ALPN, которые полностью удаляем
 REMOVE_ALPN = {
     "h2",
     "http/1.1",
@@ -25,91 +45,1049 @@ REMOVE_ALPN = {
 }
 
 
-def process_configs(raw_text):
-    """Обрабатывает VLESS конфигурации (DNS резолв, замена SNI, фильтрация ALPN)"""
-    cache = {}
-    lines = raw_text.splitlines()
-    result = []
+# ============================================================
+# DNS CACHE
+# ============================================================
 
-    for line in lines:
-        line = line.strip()
+DNS_CACHE = {}
 
-        if not line.startswith("vless://"):
-            result.append(line)
-            continue
 
-        parts = urlsplit(line)
-        netloc = parts.netloc
-        m = re.match(r"(.+@)([^:]+)(:\d+)", netloc)
+def resolve_host(host):
+    """
+    DNS hostname -> IPv4.
 
-        if m:
-            prefix, host, port = m.groups()
+    Если уже IP — возвращаем как есть.
+    """
 
-            if not re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", host):
-                if host not in cache:
-                    try:
-                        cache[host] = socket.gethostbyname(host)
-                        print(f"[DNS] {host} -> {cache[host]}")
-                    except Exception:
-                        cache[host] = host
+    if not host:
+        return host
 
-                netloc = prefix + cache[host] + port
+    # Уже IPv4
+    if re.fullmatch(
+        r"\d{1,3}(?:\.\d{1,3}){3}",
+        host
+    ):
+        return host
 
-        params = parse_qsl(parts.query, keep_blank_values=True)
-        new_params = []
+    if host in DNS_CACHE:
+        return DNS_CACHE[host]
 
-        for k, v in params:
-            if k == "alpn" and v in REMOVE_ALPN:
+    try:
+        ip = socket.gethostbyname(host)
+
+        DNS_CACHE[host] = ip
+
+        print(
+            f"[DNS] {host} -> {ip}"
+        )
+
+        return ip
+
+    except Exception as e:
+
+        print(
+            f"[DNS] Не удалось разрешить {host}: {e}"
+        )
+
+        DNS_CACHE[host] = host
+
+        return host
+
+
+# ============================================================
+# ALPN
+# ============================================================
+
+def clean_alpn(value):
+    """
+    Удаляет h2/http1.1.
+
+    Если ALPN:
+        h2
+        http/1.1
+        h2,http/1.1
+
+    возвращает None.
+
+    Остальные значения сохраняются.
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, list):
+
+        result = []
+
+        for item in value:
+
+            item = str(item).strip()
+
+            if item.lower() in REMOVE_ALPN:
                 continue
 
-            if k == "sni":
-                v = "rbc.ru"
+            result.append(item)
 
-            new_params.append((k, v))
+        if not result:
+            return None
 
-        new_query = urlencode(new_params)
+        return result
 
-        result.append(
-            urlunsplit(
-                (parts.scheme, netloc, parts.path, new_query, parts.fragment)
+    value = str(value).strip()
+
+    if value.lower() in REMOVE_ALPN:
+        return None
+
+    # На случай строки:
+    # h2,http/1.1
+    parts = [
+        x.strip()
+        for x in value.split(",")
+    ]
+
+    parts = [
+        x for x in parts
+        if x.lower() not in {
+            "h2",
+            "http/1.1"
+        }
+    ]
+
+    if not parts:
+        return None
+
+    return ",".join(parts)
+
+
+# ============================================================
+# QUERY HELPERS
+# ============================================================
+
+def make_query(params):
+    """
+    Формирует URL query.
+
+    urlencode автоматически делает:
+        h2,http/1.1
+        /
+        пробелы
+
+    безопасными для URL.
+    """
+
+    return urlencode(
+        params,
+        doseq=True
+    )
+
+
+# ============================================================
+# VLESS
+# ============================================================
+
+def build_vless(outbound, remark=""):
+    """
+    Из VLESS outbound делает vless:// URI.
+    """
+
+    settings = outbound.get(
+        "settings",
+        {}
+    )
+
+    stream = outbound.get(
+        "streamSettings",
+        {}
+    )
+
+    # --------------------------------------------------------
+    # SERVER
+    # --------------------------------------------------------
+
+    address = ""
+    port = ""
+
+    # Xray VLESS:
+    #
+    # settings.vnext[0].address
+    # settings.vnext[0].port
+
+    vnext = settings.get(
+        "vnext",
+        []
+    )
+
+    if isinstance(vnext, list) and vnext:
+
+        server = vnext[0]
+
+        if isinstance(server, dict):
+
+            address = server.get(
+                "address",
+                ""
+            )
+
+            port = server.get(
+                "port",
+                ""
+            )
+
+            users = server.get(
+                "users",
+                []
+            )
+
+        else:
+            users = []
+
+    else:
+
+        address = (
+            settings.get("address")
+            or outbound.get("address")
+            or ""
+        )
+
+        port = (
+            settings.get("port")
+            or outbound.get("port")
+            or ""
+        )
+
+        users = settings.get(
+            "users",
+            []
+        )
+
+    if not users:
+
+        users = (
+            settings.get("vnext", [{}])[0].get(
+                "users",
+                []
+            )
+            if isinstance(
+                settings.get("vnext", []),
+                list
+            )
+            and settings.get("vnext")
+            else []
+        )
+
+    if not users:
+
+        print(
+            "[-] VLESS: не найден users"
+        )
+
+        return None
+
+    user = users[0]
+
+    if not isinstance(user, dict):
+        return None
+
+    uuid_value = (
+        user.get("id")
+        or user.get("uuid")
+        or ""
+    )
+
+    if not uuid_value:
+        print(
+            "[-] VLESS: не найден UUID"
+        )
+        return None
+
+    # --------------------------------------------------------
+    # DNS -> IP
+    # --------------------------------------------------------
+
+    ip = resolve_host(
+        str(address)
+    )
+
+    # --------------------------------------------------------
+    # STREAM
+    # --------------------------------------------------------
+
+    network = str(
+        stream.get(
+            "network",
+            "tcp"
+        )
+    ).lower()
+
+    security = str(
+        stream.get(
+            "security",
+            ""
+        )
+    ).lower()
+
+    params = []
+
+    # --------------------------------------------------------
+    # TYPE
+    # --------------------------------------------------------
+
+    if network:
+        params.append(
+            ("type", network)
+        )
+
+    # --------------------------------------------------------
+    # SECURITY
+    # --------------------------------------------------------
+
+    if security:
+        params.append(
+            ("security", security)
+        )
+
+    # --------------------------------------------------------
+    # TLS
+    # --------------------------------------------------------
+
+    tls = stream.get(
+        "tlsSettings",
+        {}
+    )
+
+    if not isinstance(tls, dict):
+        tls = {}
+
+    # Всегда меняем SNI
+    if security == "tls":
+
+        params.append(
+            ("sni", SNI)
+        )
+
+        # fingerprint оставляем
+        fingerprint = tls.get(
+            "fingerprint"
+        )
+
+        if fingerprint:
+            params.append(
+                (
+                    "fp",
+                    str(fingerprint)
+                )
+            )
+
+        # ALPN
+        alpn = clean_alpn(
+            tls.get("alpn")
+        )
+
+        if alpn:
+
+            if isinstance(alpn, list):
+
+                params.append(
+                    (
+                        "alpn",
+                        ",".join(alpn)
+                    )
+                )
+
+            else:
+
+                params.append(
+                    (
+                        "alpn",
+                        alpn
+                    )
+                )
+
+    # --------------------------------------------------------
+    # WS
+    # --------------------------------------------------------
+
+    if network == "ws":
+
+        ws = stream.get(
+            "wsSettings",
+            {}
+        )
+
+        if isinstance(ws, dict):
+
+            path = ws.get(
+                "path"
+            )
+
+            if path:
+                params.append(
+                    (
+                        "path",
+                        path
+                    )
+                )
+
+            headers = ws.get(
+                "headers",
+                {}
+            )
+
+            if isinstance(headers, dict):
+
+                host = headers.get(
+                    "Host"
+                )
+
+                if host:
+                    params.append(
+                        (
+                            "host",
+                            host
+                        )
+                    )
+
+    # --------------------------------------------------------
+    # gRPC
+    # --------------------------------------------------------
+
+    elif network == "grpc":
+
+        grpc = stream.get(
+            "grpcSettings",
+            {}
+        )
+
+        if isinstance(grpc, dict):
+
+            service_name = (
+                grpc.get("serviceName")
+                or grpc.get("service_name")
+                or ""
+            )
+
+            if service_name:
+
+                params.append(
+                    (
+                        "serviceName",
+                        service_name
+                    )
+                )
+
+            mode = grpc.get(
+                "mode"
+            )
+
+            if mode:
+                params.append(
+                    (
+                        "mode",
+                        mode
+                    )
+                )
+
+    # --------------------------------------------------------
+    # XHTTP
+    # --------------------------------------------------------
+
+    elif network == "xhttp":
+
+        xhttp = stream.get(
+            "xhttpSettings",
+            {}
+        )
+
+        if isinstance(xhttp, dict):
+
+            path = xhttp.get(
+                "path"
+            )
+
+            if path:
+                params.append(
+                    (
+                        "path",
+                        path
+                    )
+                )
+
+            host = xhttp.get(
+                "host"
+            )
+
+            if host:
+                params.append(
+                    (
+                        "host",
+                        host
+                    )
+                )
+
+    # --------------------------------------------------------
+    # REALITY
+    # --------------------------------------------------------
+
+    reality = stream.get(
+        "realitySettings"
+    )
+
+    if isinstance(reality, dict):
+
+        # Если Reality — SNI тоже rbc.ru
+        params.append(
+            ("sni", SNI)
+        )
+
+        public_key = (
+            reality.get("publicKey")
+            or reality.get("pbk")
+        )
+
+        if public_key:
+
+            params.append(
+                (
+                    "pbk",
+                    public_key
+                )
+            )
+
+        short_id = (
+            reality.get("shortId")
+            or reality.get("sid")
+        )
+
+        if short_id:
+
+            params.append(
+                (
+                    "sid",
+                    short_id
+                )
+            )
+
+        spider_x = (
+            reality.get("spiderX")
+            or reality.get("spx")
+        )
+
+        if spider_x:
+
+            params.append(
+                (
+                    "spx",
+                    spider_x
+                )
+            )
+
+        fingerprint = (
+            reality.get("fingerprint")
+        )
+
+        if fingerprint:
+
+            params.append(
+                (
+                    "fp",
+                    fingerprint
+                )
+            )
+
+    # --------------------------------------------------------
+    # FLOW
+    # --------------------------------------------------------
+
+    flow = user.get(
+        "flow"
+    )
+
+    if flow:
+
+        params.append(
+            (
+                "flow",
+                flow
             )
         )
 
-    return result
+    # --------------------------------------------------------
+    # BUILD
+    # --------------------------------------------------------
 
+    query = make_query(
+        params
+    )
+
+    fragment = quote(
+        str(remark),
+        safe=""
+    )
+
+    uri = (
+        f"vless://"
+        f"{uuid_value}@"
+        f"{ip}:{port}"
+        f"/?"
+        f"{query}"
+        f"#{fragment}"
+    )
+
+    return uri
+
+
+# ============================================================
+# HYSTERIA
+# ============================================================
+
+def build_hysteria(outbound, remark=""):
+    """
+    Hysteria -> hysteria2://
+    """
+
+    settings = outbound.get(
+        "settings",
+        {}
+    )
+
+    stream = outbound.get(
+        "streamSettings",
+        {}
+    )
+
+    if not isinstance(settings, dict):
+        settings = {}
+
+    if not isinstance(stream, dict):
+        stream = {}
+
+    # --------------------------------------------------------
+    # ADDRESS / PORT
+    # --------------------------------------------------------
+
+    address = (
+        settings.get("address")
+        or outbound.get("address")
+        or ""
+    )
+
+    port = (
+        settings.get("port")
+        or outbound.get("port")
+        or ""
+    )
+
+    # Некоторые конфиги могут хранить
+    # сервер в hysteriaSettings.
+
+    hysteria_settings = stream.get(
+        "hysteriaSettings",
+        {}
+    )
+
+    if not isinstance(
+        hysteria_settings,
+        dict
+    ):
+        hysteria_settings = {}
+
+    if not address:
+
+        address = (
+            hysteria_settings.get("address")
+            or ""
+        )
+
+    if not port:
+
+        port = (
+            hysteria_settings.get("port")
+            or ""
+        )
+
+    # --------------------------------------------------------
+    # AUTH
+    # --------------------------------------------------------
+
+    auth = (
+        hysteria_settings.get("auth")
+        or settings.get("auth")
+        or outbound.get("auth")
+        or ""
+    )
+
+    if not auth:
+
+        print(
+            "[-] Hysteria: auth отсутствует"
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # DNS -> IP
+    # --------------------------------------------------------
+
+    ip = resolve_host(
+        str(address)
+    )
+
+    # --------------------------------------------------------
+    # TLS
+    # --------------------------------------------------------
+
+    tls = stream.get(
+        "tlsSettings",
+        {}
+    )
+
+    if not isinstance(tls, dict):
+        tls = {}
+
+    # SNI всегда rbc.ru
+    params = [
+        (
+            "sni",
+            SNI
+        ),
+        (
+            "insecure",
+            "0"
+        )
+    ]
+
+    # --------------------------------------------------------
+    # ALPN
+    # --------------------------------------------------------
+
+    alpn = clean_alpn(
+        tls.get("alpn")
+    )
+
+    if alpn:
+
+        if isinstance(alpn, list):
+
+            params.append(
+                (
+                    "alpn",
+                    ",".join(alpn)
+                )
+            )
+
+        else:
+
+            params.append(
+                (
+                    "alpn",
+                    alpn
+                )
+            )
+
+    # --------------------------------------------------------
+    # OBFUSCATION
+    # --------------------------------------------------------
+
+    obfs = (
+        hysteria_settings.get("obfs")
+        or settings.get("obfs")
+    )
+
+    if obfs:
+
+        params.append(
+            (
+                "obfs",
+                str(obfs)
+            )
+        )
+
+    # --------------------------------------------------------
+    # BUILD
+    # --------------------------------------------------------
+
+    query = make_query(
+        params
+    )
+
+    fragment = quote(
+        str(remark),
+        safe=""
+    )
+
+    uri = (
+        f"hysteria2://"
+        f"{quote(str(auth), safe='')}@"
+        f"{ip}:{port}"
+        f"/?"
+        f"{query}"
+        f"#{fragment}"
+    )
+
+    return uri
+
+
+# ============================================================
+# RECURSIVE JSON SCANNER
+# ============================================================
+
+def extract_configs(obj, result):
+    """
+    Рекурсивно ищет все outbounds.
+
+    Поддерживает:
+        vless
+        hysteria
+        hysteria2
+    """
+
+    if isinstance(obj, dict):
+
+        # ----------------------------------------------------
+        # OUTBOUNDS
+        # ----------------------------------------------------
+
+        outbounds = obj.get(
+            "outbounds"
+        )
+
+        if isinstance(
+            outbounds,
+            list
+        ):
+
+            remark = (
+                obj.get("remarks")
+                or obj.get("remark")
+                or ""
+            )
+
+            for outbound in outbounds:
+
+                if not isinstance(
+                    outbound,
+                    dict
+                ):
+                    continue
+
+                protocol = str(
+                    outbound.get(
+                        "protocol",
+                        ""
+                    )
+                ).lower()
+
+                # --------------------------------------------
+                # VLESS
+                # --------------------------------------------
+
+                if protocol == "vless":
+
+                    uri = build_vless(
+                        outbound,
+                        remark
+                    )
+
+                    if uri:
+
+                        result.append(uri)
+
+                        print(
+                            "[+] VLESS:",
+                            remark
+                        )
+
+                # --------------------------------------------
+                # HYSTERIA
+                # --------------------------------------------
+
+                elif protocol in {
+                    "hysteria",
+                    "hysteria2"
+                }:
+
+                    uri = build_hysteria(
+                        outbound,
+                        remark
+                    )
+
+                    if uri:
+
+                        result.append(uri)
+
+                        print(
+                            "[+] HYSTERIA:",
+                            remark
+                        )
+
+        # ----------------------------------------------------
+        # RECURSION
+        # ----------------------------------------------------
+
+        for value in obj.values():
+
+            extract_configs(
+                value,
+                result
+            )
+
+    elif isinstance(obj, list):
+
+        for value in obj:
+
+            extract_configs(
+                value,
+                result
+            )
+
+
+# ============================================================
+# DECODE SUBSCRIPTION
+# ============================================================
+
+def decode_subscription(text):
+    """
+    Декодирует Base64 подписку.
+
+    Поддерживает:
+        обычный Base64
+        Base64 с переносами
+        padding
+    """
+
+    text = text.strip()
+
+    # Убираем whitespace
+    text = re.sub(
+        r"\s+",
+        "",
+        text
+    )
+
+    # Иногда сервер может вернуть JSON-строку
+    if (
+        text.startswith('"')
+        and text.endswith('"')
+    ):
+        try:
+            text = json.loads(text)
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # BASE64
+    # --------------------------------------------------------
+
+    try:
+
+        raw = base64.b64decode(
+            text + "=" * (
+                -len(text) % 4
+            ),
+            validate=False
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] Base64 error:",
+            e
+        )
+
+        return None
+
+    # --------------------------------------------------------
+    # UTF-8
+    # --------------------------------------------------------
+
+    decoded = raw.decode(
+        "utf-8",
+        errors="ignore"
+    ).strip()
+
+    return decoded
+
+
+# ============================================================
+# GITHUB GIST
+# ============================================================
 
 def save_to_gist(content):
-    """Сохраняет или обновляет Gist на GitHub"""
 
     if not MY_TOKEN:
-        print("[-] Ошибка: Переменная окружения MY_TOKEN не задана!")
+
+        print(
+            "[-] Ошибка: MY_TOKEN "
+            "не задан!"
+        )
+
         return
 
     headers = {
-        "Authorization": f"token {MY_TOKEN}",
-        "Accept": "application/vnd.github.v3+json",
+        "Authorization":
+            f"token {MY_TOKEN}",
+
+        "Accept":
+            "application/vnd.github.v3+json",
+
+        "Content-Type":
+            "application/json",
     }
 
     payload = {
-        "description": GIST_DESCRIPTION,
-        "public": False,
+
+        "description":
+            GIST_DESCRIPTION,
+
+        "public":
+            False,
+
         "files": {
+
             GIST_FILENAME: {
-                "content": content
+
+                "content":
+                    content
             }
         },
     }
 
+    # --------------------------------------------------------
+    # UPDATE
+    # --------------------------------------------------------
+
     if GIST_ID:
-        url = f"https://api.github.com/gists/{GIST_ID}"
+
+        url = (
+            f"https://api.github.com/"
+            f"gists/{GIST_ID}"
+        )
+
+        print(
+            "\n[*] Обновляем существующий Gist..."
+        )
+
         resp = requests.patch(
             url,
             json=payload,
             headers=headers,
             timeout=30,
         )
+
+    # --------------------------------------------------------
+    # CREATE
+    # --------------------------------------------------------
+
     else:
-        url = "https://api.github.com/gists"
+
+        url = (
+            "https://api.github.com/gists"
+        )
+
+        print(
+            "\n[*] Создаём новый Gist..."
+        )
+
         resp = requests.post(
             url,
             json=payload,
@@ -117,214 +1095,597 @@ def save_to_gist(content):
             timeout=30,
         )
 
-    if resp.status_code in [200, 201]:
+    # --------------------------------------------------------
+    # RESULT
+    # --------------------------------------------------------
+
+    if resp.status_code in {
+        200,
+        201
+    }:
+
         data = resp.json()
 
-        print("\n[+] Успешно сохранено в Gist!")
-        print(f"[+] Ссылка на Gist: {data.get('html_url')}")
+        print(
+            "\n[+] Gist успешно сохранён!"
+        )
+
+        print(
+            "[+] Gist:",
+            data.get("html_url")
+        )
 
         if not GIST_ID:
+
             print(
-                f"[!] Сохраните этот Gist ID для будущих обновлений: "
-                f"{data.get('id')}"
+                "[!] GIST_ID для следующих "
+                "запусков:"
+            )
+
+            print(
+                data.get("id")
             )
 
     else:
-        print(
-            f"[-] Ошибка при сохранении Gist: "
-            f"{resp.status_code}"
-        )
-        print(resp.text)
 
+        print(
+            "\n[-] Ошибка GitHub:",
+            resp.status_code
+        )
+
+        print(
+            resp.text[:3000]
+        )
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
 
+    print(
+        "========================================"
+    )
+
+    print(
+        "        BoSVPN CONFIG EXTRACTOR"
+    )
+
+    print(
+        "========================================"
+    )
+
     session = requests.Session()
 
-    session.headers.update(
-        {
-            "User-Agent": "Mozilla/5.0 (Android 13; Mobile)",
-            "Content-Type": "application/json",
-        }
-    )
+    session.headers.update({
+
+        "User-Agent":
+            "Mozilla/5.0 "
+            "(Android 13; Mobile)",
+
+        "Content-Type":
+            "application/json",
+
+    })
+
+    # ========================================================
+    # RANDOM ACCOUNT
+    # ========================================================
 
     email = (
         "".join(
             random.choices(
-                string.ascii_lowercase + string.digits,
+                string.ascii_lowercase
+                + string.digits,
                 k=10
             )
         )
         + "@gmail.com"
     )
 
-    client_id = str(uuid.uuid4())
-    hwid = str(uuid.uuid4())
+    client_id = str(
+        uuid.uuid4()
+    )
 
-    print("[*] Email:", email)
-    print("[*] HWID:", hwid)
+    hwid = str(
+        uuid.uuid4()
+    )
 
-    # ---------------------------------------------------------
+    print(
+        "[*] Email:",
+        email
+    )
+
+    print(
+        "[*] HWID:",
+        hwid
+    )
+
+    # ========================================================
     # LOGIN
-    # ---------------------------------------------------------
+    # ========================================================
 
-    resp = session.post(
-        f"{BASE_URL}/api/auth/login",
-        json={
-            "email": email,
-            "clientId": client_id,
-            "hwid": hwid,
-        },
-        timeout=30,
+    print(
+        "\n[*] LOGIN..."
+    )
+
+    try:
+
+        resp = session.post(
+
+            f"{BASE_URL}/api/auth/login",
+
+            json={
+
+                "email":
+                    email,
+
+                "clientId":
+                    client_id,
+
+                "hwid":
+                    hwid,
+            },
+
+            timeout=30,
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] Ошибка LOGIN:",
+            e
+        )
+
+        return
+
+    print(
+        "[+] Login HTTP:",
+        resp.status_code
     )
 
     if resp.status_code != 200:
-        print("[-] Ошибка HTTP:", resp.status_code)
-        print(resp.text)
+
+        print(
+            resp.text[:3000]
+        )
+
         return
 
-    data = resp.json()
+    try:
+
+        data = resp.json()
+
+    except Exception as e:
+
+        print(
+            "[-] JSON LOGIN error:",
+            e
+        )
+
+        print(
+            resp.text[:3000]
+        )
+
+        return
 
     if "accessToken" not in data:
-        print("[-] Ошибка авторизации")
-        print(data)
+
+        print(
+            "[-] accessToken отсутствует"
+        )
+
+        print(
+            json.dumps(
+                data,
+                ensure_ascii=False,
+                indent=2
+            )[:5000]
+        )
+
         return
 
-    # ---------------------------------------------------------
-    # SUBSCRIPTION
-    # ---------------------------------------------------------
-
-    sub_api_url = (
-        data["user"]
-        ["access"]
-        ["premium"]
-        ["subscriptionUrl"]
+    print(
+        "[+] Авторизация успешна"
     )
 
-    print("[+] Subscription URL получен:")
-    print(sub_api_url)
+    # ========================================================
+    # SUBSCRIPTION URL
+    # ========================================================
 
-    # URL имеет вид:
-    #
-    # https://321abc.bosvpn.com/api/sub/ID/v2ray-json
-    #
-    # Нам нужен именно элемент после /sub/
-    #
+    try:
+
+        sub_api_url = (
+            data
+            ["user"]
+            ["access"]
+            ["premium"]
+            ["subscriptionUrl"]
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] Не найден subscriptionUrl:",
+            e
+        )
+
+        return
+
+    print(
+        "\n[+] Subscription URL:"
+    )
+
+    print(
+        sub_api_url
+    )
+
+    # ========================================================
+    # SUB ID
+    # ========================================================
+
     match = re.search(
         r"/api/sub/([^/]+)/",
         sub_api_url
     )
 
     if not match:
+
         print(
-            "[-] Не удалось извлечь ID подписки из URL"
+            "[-] Не удалось получить "
+            "ID подписки"
         )
+
         return
 
     sub_id = match.group(1)
 
     real_sub_url = (
-        f"https://access.bosx.net/subb/{sub_id}"
+        f"https://access.bosx.net/"
+        f"subb/{sub_id}"
     )
 
     print(
-        "[+] Subscription endpoint:",
+        "\n[+] Subscription endpoint:"
+    )
+
+    print(
         real_sub_url
     )
 
-    # ---------------------------------------------------------
-    # CONFIGS
-    # ---------------------------------------------------------
-
-    config_resp = session.get(
-        real_sub_url,
-        headers={
-            "User-Agent": "okhttp/4.12.0",
-            "X-HWID": hwid,
-        },
-        timeout=30,
-    )
+    # ========================================================
+    # SUBSCRIPTION REQUEST
+    # ========================================================
 
     print(
-        "[*] Subscription HTTP:",
-        config_resp.status_code
+        "\n[*] Получаем конфигурации..."
     )
 
-    if config_resp.headers.get("X-Hwid-Not-Supported"):
-        print("[-] HWID не принят")
-        return
-
-    if config_resp.status_code != 200:
-        print(
-            "[-] Сервер подписки вернул ошибку:"
-        )
-        print(config_resp.text[:2000])
-        return
-
-    # ---------------------------------------------------------
-    # BASE64
-    # ---------------------------------------------------------
-
     try:
-        configs_raw = base64.b64decode(
-            config_resp.text.strip()
-        ).decode(
-            "utf-8",
-            errors="ignore"
+
+        config_resp = session.get(
+
+            real_sub_url,
+
+            headers={
+
+                "User-Agent":
+                    "okhttp/4.12.0",
+
+                "X-HWID":
+                    hwid,
+
+                "Accept":
+                    "*/*",
+
+                "Accept-Encoding":
+                    "gzip, deflate, br",
+            },
+
+            timeout=30,
         )
 
     except Exception as e:
+
         print(
-            "[-] Ошибка декодирования:",
+            "[-] Ошибка subscription:",
             e
         )
+
         return
 
-    # ---------------------------------------------------------
-    # PROCESS
-    # ---------------------------------------------------------
-
-    processed_lines = process_configs(
-        configs_raw
-    )
-
-    final_content = "\n".join(
-        processed_lines
-    )
-
-    count = sum(
-        1
-        for line in processed_lines
-        if line.startswith("vless://")
+    print(
+        "[+] Subscription HTTP:",
+        config_resp.status_code
     )
 
     print(
-        f"[+] Обработано серверов: {count}"
+        "[+] Content-Type:",
+        config_resp.headers.get(
+            "Content-Type"
+        )
     )
 
-    # ---------------------------------------------------------
-    # LOCAL FILE
-    # ---------------------------------------------------------
+    print(
+        "[+] Content-Encoding:",
+        config_resp.headers.get(
+            "Content-Encoding"
+        )
+    )
+
+    if config_resp.headers.get(
+        "X-Hwid-Not-Supported"
+    ):
+
+        print(
+            "[-] HWID не принят"
+        )
+
+        return
+
+    if config_resp.status_code != 200:
+
+        print(
+            "[-] Ошибка subscription:"
+        )
+
+        print(
+            config_resp.text[:3000]
+        )
+
+        return
+
+    # ========================================================
+    # BODY
+    # ========================================================
+
+    body = config_resp.text.strip()
+
+    print(
+        "[+] Получено:",
+        len(body),
+        "символов"
+    )
+
+    # ========================================================
+    # BASE64
+    # ========================================================
+
+    print(
+        "\n[*] Декодируем Base64..."
+    )
+
+    decoded = decode_subscription(
+        body
+    )
+
+    if not decoded:
+
+        print(
+            "[-] Не удалось декодировать"
+        )
+
+        return
+
+    print(
+        "[+] После Base64:",
+        len(decoded),
+        "символов"
+    )
+
+    # ========================================================
+    # SAVE RAW DECODED
+    # ========================================================
 
     with open(
-        "configs.txt",
+        "subscription_decoded.txt",
         "w",
         encoding="utf-8"
     ) as f:
-        f.write(final_content)
+
+        f.write(decoded)
 
     print(
-        "[+] configs.txt сохранён"
+        "[+] subscription_decoded.txt сохранён"
     )
 
-    # ---------------------------------------------------------
+    # ========================================================
+    # JSON
+    # ========================================================
+
+    try:
+
+        json_data = json.loads(
+            decoded
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] JSON error:",
+            e
+        )
+
+        print(
+            decoded[:3000]
+        )
+
+        return
+
+    print(
+        "[+] JSON успешно разобран"
+    )
+
+    # ========================================================
+    # EXTRACT
+    # ========================================================
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "          EXTRACT CONFIGS"
+    )
+
+    print(
+        "========================================"
+    )
+
+    configs = []
+
+    extract_configs(
+        json_data,
+        configs
+    )
+
+    # ========================================================
+    # REMOVE DUPLICATES
+    # ========================================================
+
+    unique_configs = []
+
+    seen = set()
+
+    for config in configs:
+
+        if config in seen:
+            continue
+
+        seen.add(config)
+
+        unique_configs.append(
+            config
+        )
+
+    configs = unique_configs
+
+    # ========================================================
+    # STATISTICS
+    # ========================================================
+
+    vless_count = sum(
+        1
+        for x in configs
+        if x.startswith("vless://")
+    )
+
+    hysteria_count = sum(
+        1
+        for x in configs
+        if x.startswith("hysteria2://")
+    )
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "              РЕЗУЛЬТАТ"
+    )
+
+    print(
+        "========================================"
+    )
+
+    print(
+        "[+] VLESS:",
+        vless_count
+    )
+
+    print(
+        "[+] Hysteria:",
+        hysteria_count
+    )
+
+    print(
+        "[+] Всего:",
+        len(configs)
+    )
+
+    # ========================================================
+    # SAVE ALL CONFIGS
+    # ========================================================
+
+    final_content = "\n".join(
+        configs
+    )
+
+    with open(
+        OUTPUT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        f.write(
+            final_content
+        )
+
+        if configs:
+            f.write("\n")
+
+    print(
+        "\n[+] Все конфиги сохранены:"
+    )
+
+    print(
+        f"[+] {OUTPUT_FILE}"
+    )
+
+    # ========================================================
+    # PRINT
+    # ========================================================
+
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "             CONFIG LINKS"
+    )
+
+    print(
+        "========================================"
+    )
+
+    for i, config in enumerate(
+        configs,
+        1
+    ):
+
+        print(
+            f"\n[{i}]"
+        )
+
+        print(
+            config
+        )
+
+    # ========================================================
     # GIST
-    # ---------------------------------------------------------
+    # ========================================================
 
     save_to_gist(
         final_content
     )
 
+    print(
+        "\n========================================"
+    )
+
+    print(
+        "                 DONE"
+    )
+
+    print(
+        "========================================"
+    )
+
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
