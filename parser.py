@@ -30,10 +30,19 @@ OUTPUT_FILE = "configs.txt"
 
 NEW_SNI = "rbc.ru"
 
-# ВАЖНО:
-# Именно такой UA использовался для получения полной подписки
-# включая Hysteria.
 HAPP_USER_AGENT = "Happ/4.1.0/Android/17860741775021899610"
+
+
+# ============================================================
+# GITVERSE CONFIG
+# ============================================================
+
+GITVERSE_API = "https://api.gitverse.ru"
+
+GITVERSE_OWNER = "mirgittech"
+GITVERSE_REPO = "bos"
+GITVERSE_BRANCH = "master"
+GITVERSE_FILE = "configs.txt"
 
 
 # ============================================================
@@ -74,6 +83,7 @@ def resolve_host(host):
             ip = info[4][0]
 
             if ip:
+
                 DNS_CACHE[host] = ip
 
                 print(
@@ -220,9 +230,10 @@ def make_vless(outbound, remark):
 
     if security == "tls":
 
+        # SNI -> rbc.ru
         params["sni"] = NEW_SNI
 
-        # ALPN намеренно НЕ переносим
+        # ALPN намеренно НЕ добавляем
 
         fingerprint = tls.get(
             "fingerprint"
@@ -265,7 +276,8 @@ def make_vless(outbound, remark):
                 )
 
                 if host:
-                    # Оригинальный Host сохраняем
+
+                    # Оригинальный WS Host сохраняем
                     params["host"] = host
 
     # --------------------------------------------------------
@@ -288,6 +300,7 @@ def make_vless(outbound, remark):
             )
 
             if service_name:
+
                 params["serviceName"] = (
                     service_name
                 )
@@ -297,6 +310,7 @@ def make_vless(outbound, remark):
             )
 
             if mode:
+
                 params["mode"] = mode
 
             authority = grpc.get(
@@ -304,7 +318,10 @@ def make_vless(outbound, remark):
             )
 
             if authority:
-                params["authority"] = authority
+
+                params["authority"] = (
+                    authority
+                )
 
     # --------------------------------------------------------
     # XHTTP
@@ -340,8 +357,7 @@ def make_vless(outbound, remark):
             if host:
                 params["host"] = host
 
-            # КРИТИЧЕСКИ ВАЖНО:
-            # сохраняем весь extra как есть
+            # Сохраняем полный extra
             extra = xhttp.get(
                 "extra"
             )
@@ -434,7 +450,9 @@ def make_vless(outbound, remark):
         + "/?"
         + query
         + "#"
-        + enc(remark or "VLESS")
+        + enc(
+            remark or "VLESS"
+        )
     )
 
 
@@ -468,14 +486,6 @@ def make_hysteria(outbound, remark):
     if not isinstance(hysteria, dict):
         hysteria = {}
 
-    tls = stream.get(
-        "tlsSettings",
-        {}
-    )
-
-    if not isinstance(tls, dict):
-        tls = {}
-
     # --------------------------------------------------------
     # ADDRESS
     # --------------------------------------------------------
@@ -506,9 +516,12 @@ def make_hysteria(outbound, remark):
     )
 
     if not address or not port or not auth:
+
         print(
-            "[-] Hysteria: missing address/port/auth"
+            "[-] Hysteria: missing "
+            "address/port/auth"
         )
+
         return None
 
     original_address = str(
@@ -540,12 +553,11 @@ def make_hysteria(outbound, remark):
     )
 
     if obfs:
+
         params["obfs"] = str(
             obfs
         )
 
-    # Некоторые варианты конфигурации
-    # могут иметь obfs-password.
     obfs_password = (
         hysteria.get("obfs-password")
         or hysteria.get("obfsPassword")
@@ -554,6 +566,7 @@ def make_hysteria(outbound, remark):
     )
 
     if obfs_password:
+
         params["obfs-password"] = str(
             obfs_password
         )
@@ -683,7 +696,9 @@ def make_trojan(outbound, remark):
         if isinstance(headers, dict):
 
             if headers.get("Host"):
-                params["host"] = headers["Host"]
+                params["host"] = (
+                    headers["Host"]
+                )
 
     # --------------------------------------------------------
     # GRPC
@@ -702,14 +717,14 @@ def make_trojan(outbound, remark):
             )
 
         if grpc.get("mode"):
-            params["mode"] = grpc["mode"]
+            params["mode"] = (
+                grpc["mode"]
+            )
 
         if grpc.get("authority"):
             params["authority"] = (
                 grpc["authority"]
             )
-
-    # ALPN не добавляем
 
     query = urlencode(
         params,
@@ -916,7 +931,7 @@ def scan(obj, results):
                         "link": link
                     })
 
-        # Продолжаем искать вложенные JSON
+        # Ищем вложенные JSON-структуры
         for value in obj.values():
 
             scan(
@@ -946,13 +961,15 @@ def save_to_gist(content):
             "\n[!] MY_TOKEN не задан."
         )
 
-        return
+        return False
 
     headers = {
         "Authorization":
             f"token {MY_TOKEN}",
+
         "Accept":
             "application/vnd.github.v3+json",
+
         "Content-Type":
             "application/json"
     }
@@ -972,76 +989,353 @@ def save_to_gist(content):
         }
     }
 
-    if GIST_ID:
+    try:
 
-        url = (
-            "https://api.github.com/gists/"
-            + GIST_ID
-        )
+        if GIST_ID:
+
+            url = (
+                "https://api.github.com/gists/"
+                + GIST_ID
+            )
+
+            print(
+                "\n[*] Обновляем Gist..."
+            )
+
+            response = requests.patch(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+        else:
+
+            url = (
+                "https://api.github.com/gists"
+            )
+
+            print(
+                "\n[*] Создаём Gist..."
+            )
+
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+    except Exception as e:
 
         print(
-            "\n[*] Обновляем Gist..."
+            "[-] Gist error:",
+            e
         )
 
-        response = requests.patch(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-
-    else:
-
-        url = (
-            "https://api.github.com/gists"
-        )
-
-        print(
-            "\n[*] Создаём Gist..."
-        )
-
-        response = requests.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
+        return False
 
     if response.status_code in {
         200,
         201
     }:
 
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:
+            data = {}
 
         print(
-            "[+] Gist сохранён:"
+            "[+] Gist успешно сохранён"
         )
 
         print(
+            "[+] Gist:",
             data.get("html_url")
         )
 
-        if not GIST_ID:
+        return True
+
+    print(
+        "[-] GitHub Gist error:",
+        response.status_code
+    )
+
+    print(
+        response.text[:3000]
+    )
+
+    return False
+
+
+# ============================================================
+# GITVERSE
+# ============================================================
+
+def save_to_gitverse(content):
+
+    token = os.getenv(
+        "GITVERSE_TOKEN"
+    )
+
+    if not token:
+
+        print(
+            "\n[!] GITVERSE_TOKEN не задан."
+        )
+
+        return False
+
+    headers = {
+        "Authorization":
+            f"Bearer {token}",
+
+        "Accept":
+            "application/vnd.gitverse.object+json;version=latest",
+
+        "Content-Type":
+            "application/json"
+    }
+
+    # --------------------------------------------------------
+    # GET CURRENT FILE
+    # --------------------------------------------------------
+
+    file_url = (
+        f"{GITVERSE_API}/repos/"
+        f"{GITVERSE_OWNER}/"
+        f"{GITVERSE_REPO}/contents/"
+        f"{GITVERSE_FILE}"
+    )
+
+    print(
+        "\n=================================================="
+    )
+
+    print(
+        "                 GITVERSE"
+    )
+
+    print(
+        "=================================================="
+    )
+
+    print(
+        "[*] Получаем текущий SHA..."
+    )
+
+    try:
+
+        response = requests.get(
+            file_url,
+            params={
+                "ref":
+                    GITVERSE_BRANCH,
+
+                "scope":
+                    "fast"
+            },
+            headers=headers,
+            timeout=30
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] GitVerse GET error:",
+            e
+        )
+
+        return False
+
+    print(
+        "[+] GitVerse GET:",
+        response.status_code
+    )
+
+    # --------------------------------------------------------
+    # EXISTING FILE
+    # --------------------------------------------------------
+
+    sha = None
+
+    if response.status_code == 200:
+
+        try:
+
+            file_data = response.json()
+
+        except Exception as e:
 
             print(
-                "[+] GIST_ID:"
+                "[-] GitVerse JSON error:",
+                e
             )
 
             print(
-                data.get("id")
+                response.text[:3000]
             )
+
+            return False
+
+        sha = file_data.get(
+            "sha"
+        )
+
+        print(
+            "[+] Existing SHA:",
+            sha
+        )
+
+    # --------------------------------------------------------
+    # FILE DOES NOT EXIST
+    # --------------------------------------------------------
+
+    elif response.status_code == 404:
+
+        print(
+            "[+] configs.txt ещё не существует."
+        )
+
+        print(
+            "[+] Будет создан новый файл."
+        )
 
     else:
 
         print(
-            "[-] GitHub error:",
+            "[-] GitVerse GET error:",
             response.status_code
         )
 
         print(
-            response.text[:3000]
+            response.text[:5000]
         )
+
+        return False
+
+    # --------------------------------------------------------
+    # BASE64
+    # --------------------------------------------------------
+
+    encoded_content = (
+        base64.b64encode(
+            content.encode("utf-8")
+        )
+        .decode("ascii")
+    )
+
+    payload = {
+        "content":
+            encoded_content,
+
+        "message":
+            "Auto-update BoSVPN configs",
+
+        "branch":
+            GITVERSE_BRANCH
+    }
+
+    # SHA требуется только для UPDATE
+    if sha:
+
+        payload["sha"] = sha
+
+    # --------------------------------------------------------
+    # PUT
+    # --------------------------------------------------------
+
+    print(
+        "[*] Отправляем configs.txt в GitVerse..."
+    )
+
+    try:
+
+        response = requests.put(
+            file_url,
+            json=payload,
+            headers=headers,
+            timeout=30
+        )
+
+    except Exception as e:
+
+        print(
+            "[-] GitVerse PUT error:",
+            e
+        )
+
+        return False
+
+    print(
+        "[+] GitVerse PUT:",
+        response.status_code
+    )
+
+    # --------------------------------------------------------
+    # SUCCESS
+    # --------------------------------------------------------
+
+    if response.status_code in {
+        200,
+        201
+    }:
+
+        try:
+
+            data = response.json()
+
+        except Exception:
+
+            data = {}
+
+        commit = data.get(
+            "commit",
+            {}
+        )
+
+        new_sha = commit.get(
+            "sha",
+            ""
+        )
+
+        print(
+            "[+] GitVerse успешно обновлён!"
+        )
+
+        if new_sha:
+
+            print(
+                "[+] Commit SHA:",
+                new_sha
+            )
+
+        print(
+            "[+] GitVerse:"
+        )
+
+        print(
+            "https://gitverse.ru/"
+            "mirgittech/bos/raw/"
+            "branch/master/configs.txt"
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # ERROR
+    # --------------------------------------------------------
+
+    print(
+        "[-] GitVerse PUT error:",
+        response.status_code
+    )
+
+    print(
+        response.text[:5000]
+    )
+
+    return False
 
 
 # ============================================================
@@ -1065,8 +1359,11 @@ def main():
     session = requests.Session()
 
     session.headers.update({
-        "User-Agent": HAPP_USER_AGENT,
-        "Accept": "*/*"
+        "User-Agent":
+            HAPP_USER_AGENT,
+
+        "Accept":
+            "*/*"
     })
 
     # ========================================================
@@ -1098,6 +1395,11 @@ def main():
     )
 
     print(
+        "[*] Client-ID:",
+        client_id
+    )
+
+    print(
         "[*] HWID:",
         hwid
     )
@@ -1118,12 +1420,21 @@ def main():
     try:
 
         response = session.post(
+
             f"{BASE_URL}/api/auth/login",
+
             json={
-                "email": email,
-                "clientId": client_id,
-                "hwid": hwid
+
+                "email":
+                    email,
+
+                "clientId":
+                    client_id,
+
+                "hwid":
+                    hwid
             },
+
             timeout=30
         )
 
@@ -1218,7 +1529,7 @@ def main():
     )
 
     # ========================================================
-    # EXTRACT SUB ID
+    # SUB ID
     # ========================================================
 
     match = re.search(
@@ -1250,7 +1561,7 @@ def main():
     )
 
     # ========================================================
-    # SUBSCRIPTION REQUEST
+    # HAPP SUBSCRIPTION
     # ========================================================
 
     print(
@@ -1258,6 +1569,7 @@ def main():
     )
 
     headers = {
+
         "User-Agent":
             HAPP_USER_AGENT,
 
@@ -1274,8 +1586,11 @@ def main():
     try:
 
         sub_response = requests.get(
+
             real_sub_url,
+
             headers=headers,
+
             timeout=30
         )
 
@@ -1331,14 +1646,7 @@ def main():
         return
 
     # ========================================================
-    # BODY
-    # ========================================================
-    #
-    # НЕ делаем base64.b64decode().
-    #
-    # requests уже распаковывает gzip/br.
-    #
-    # Для Happ endpoint ответ должен быть JSON.
+    # JSON
     # ========================================================
 
     body = sub_response.content
@@ -1385,7 +1693,7 @@ def main():
     )
 
     # ========================================================
-    # SAVE RAW JSON
+    # SAVE JSON
     # ========================================================
 
     try:
@@ -1415,7 +1723,7 @@ def main():
         )
 
     # ========================================================
-    # SCAN
+    # EXTRACT
     # ========================================================
 
     print(
@@ -1438,7 +1746,7 @@ def main():
     )
 
     print(
-        "\n[+] Найдено до удаления дублей:",
+        "\n[+] Найдено:",
         len(results)
     )
 
@@ -1484,7 +1792,7 @@ def main():
         )
 
     # ========================================================
-    # SAVE
+    # FINAL CONTENT
     # ========================================================
 
     final_content = "\n".join(
@@ -1492,17 +1800,36 @@ def main():
         for item in results
     )
 
+    if final_content:
+
+        final_content += "\n"
+
+    # ========================================================
+    # SAVE LOCAL FILE
+    # ========================================================
+
     with open(
         OUTPUT_FILE,
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
+        newline="\n"
     ) as f:
 
-        if final_content:
-            f.write(
-                final_content
-                + "\n"
-            )
+        f.write(
+            final_content
+        )
+
+    print(
+        "\n[+] configs.txt создан"
+    )
+
+    print(
+        "[+] Размер:",
+        os.path.getsize(
+            OUTPUT_FILE
+        ),
+        "bytes"
+    )
 
     # ========================================================
     # RESULT
@@ -1532,13 +1859,8 @@ def main():
         len(results)
     )
 
-    print(
-        "[+] Saved:",
-        OUTPUT_FILE
-    )
-
     # ========================================================
-    # PRINT CONFIGS
+    # LINKS
     # ========================================================
 
     print(
@@ -1569,12 +1891,24 @@ def main():
         )
 
     # ========================================================
-    # GIST
+    # GITHUB GIST
     # ========================================================
 
     save_to_gist(
         final_content
     )
+
+    # ========================================================
+    # GITVERSE
+    # ========================================================
+
+    save_to_gitverse(
+        final_content
+    )
+
+    # ========================================================
+    # DONE
+    # ========================================================
 
     print(
         "\n=================================================="
