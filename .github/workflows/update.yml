@@ -1,4 +1,4 @@
-name: Update Profiles
+name: BoSVPN Update
 
 on:
   workflow_dispatch:
@@ -6,48 +6,26 @@ on:
   schedule:
     - cron: "0 8,20 * * *"
 
-permissions:
-  contents: read
-
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
 
-      # ======================================================
-      # CHECKOUT
-      # ======================================================
-
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-
-
-      # ======================================================
-      # PYTHON
-      # ======================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-
-      # ======================================================
-      # DEPENDENCIES
-      # ======================================================
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests brotli
 
-
-      # ======================================================
-      # RUN PARSER
-      # ======================================================
-
-      - name: Run parser
+      - name: Run parser.py
         env:
           MY_TOKEN: ${{ secrets.MY_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
@@ -55,115 +33,19 @@ jobs:
           echo "========================================"
           echo "Running parser.py"
           echo "========================================"
-
           python parser.py
 
-
-      # ======================================================
-      # CHECK OUTPUT
-      # ======================================================
-
-      - name: Check configs.txt
+      - name: Show result
+        if: always()
         run: |
           echo "========================================"
-          echo "Checking configs.txt..."
+          echo "configs.txt"
           echo "========================================"
 
-          if [ ! -f configs.txt ]; then
-            echo ""
-            echo "ERROR: configs.txt was not created!"
-            echo ""
-            echo "Files in workspace:"
-            find . -maxdepth 3 -type f | sort
-            exit 1
+          if [ -f configs.txt ]; then
+            wc -c configs.txt
+            wc -l configs.txt
+            cat configs.txt
+          else
+            echo "configs.txt not found"
           fi
-
-          echo ""
-          echo "[+] configs.txt exists"
-
-          echo ""
-          echo "Size:"
-          wc -c configs.txt
-
-          echo ""
-          echo "Lines:"
-          wc -l configs.txt
-
-          echo ""
-          echo "First configs:"
-          head -n 10 configs.txt
-
-
-      # ======================================================
-      # GITVERSE
-      # ======================================================
-
-      - name: Push configs to GitVerse
-        env:
-          GV_USER: ${{ secrets.GV_USER }}
-          GV_TOKEN: ${{ secrets.GV_TOKEN }}
-        run: |
-
-          echo "========================================"
-          echo "GitVerse update"
-          echo "========================================"
-
-          if [ ! -f configs.txt ]; then
-            echo "ERROR: configs.txt missing"
-            exit 1
-          fi
-
-          echo "[*] Cloning GitVerse..."
-
-          git clone \
-            "https://${GV_USER}:${GV_TOKEN}@gitverse.ru/mirgittech/bos.git" \
-            gitverse
-
-          echo "[+] GitVerse cloned"
-
-          echo "[*] Copying configs.txt..."
-
-          cp configs.txt gitverse/configs.txt
-
-          cd gitverse
-
-          echo "[+] configs.txt copied"
-
-          echo ""
-          echo "Git status:"
-          git status --short
-
-          # ==================================================
-          # GIT CONFIG
-          # ==================================================
-
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          # ==================================================
-          # COMMIT
-          # ==================================================
-
-          git add configs.txt
-
-          if git diff --cached --quiet; then
-            echo ""
-            echo "[+] No changes in configs.txt"
-            echo "[+] Nothing to commit"
-            exit 0
-          fi
-
-          git commit \
-            -m "Auto update configs $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-
-          # ==================================================
-          # PUSH
-          # ==================================================
-
-          echo ""
-          echo "[*] Pushing to GitVerse..."
-
-          git push origin master
-
-          echo ""
-          echo "[+] GitVerse successfully updated"
