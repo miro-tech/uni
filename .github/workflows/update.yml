@@ -29,23 +29,43 @@ jobs:
         env:
           MY_TOKEN: ${{ secrets.MY_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
+          GITVERSE_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
           echo "========================================"
           echo "Running parser.py"
           echo "========================================"
+
           python parser.py
 
-      - name: Show result
-        if: always()
+      - name: Check configs.txt
         run: |
           echo "========================================"
-          echo "configs.txt"
+          echo "Checking configs.txt"
           echo "========================================"
 
-          if [ -f configs.txt ]; then
-            wc -c configs.txt
-            wc -l configs.txt
-            cat configs.txt
-          else
-            echo "configs.txt not found"
+          if [ ! -f configs.txt ]; then
+            echo "ERROR: configs.txt was not created!"
+            exit 1
           fi
+
+          echo "[+] configs.txt exists"
+
+          echo ""
+          echo "Size:"
+          wc -c configs.txt
+
+          echo ""
+          echo "Lines:"
+          wc -l configs.txt
+
+          echo ""
+          echo "VLESS:"
+          grep -c '^vless://' configs.txt || true
+
+          echo ""
+          echo "Hysteria2:"
+          grep -c '^hysteria2://' configs.txt || true
+
+          echo ""
+          echo "Content:"
+          cat configs.txt
