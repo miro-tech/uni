@@ -1529,36 +1529,22 @@ def main():
     )
 
     # ========================================================
-    # SUB ID
-    # ========================================================
+# SUBSCRIPTION ENDPOINT
+# ========================================================
 
-    match = re.search(
-        r"/api/sub/([^/]+)/",
-        sub_url
-    )
+# subscriptionUrl уже содержит полный рабочий endpoint.
+# Например:
+# https://access.bosx.net/subb/xxxxx/v2ray-json
 
-    if not match:
+real_sub_url = sub_url.strip()
 
-        print(
-            "[-] Не удалось получить sub ID"
-        )
+print(
+    "\n[+] Subscription endpoint:"
+)
 
-        return
-
-    sub_id = match.group(1)
-
-    real_sub_url = (
-        "https://access.bosx.net/subb/"
-        + sub_id
-    )
-
-    print(
-        "\n[+] Subscription endpoint:"
-    )
-
-    print(
-        real_sub_url
-    )
+print(
+    real_sub_url
+)
 
     # ========================================================
     # HAPP SUBSCRIPTION
