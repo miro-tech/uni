@@ -1528,23 +1528,23 @@ def main():
         sub_url
     )
 
+        # ========================================================
+    # SUBSCRIPTION ENDPOINT
     # ========================================================
-# SUBSCRIPTION ENDPOINT
-# ========================================================
 
-# subscriptionUrl уже содержит полный рабочий endpoint.
-# Например:
-# https://access.bosx.net/subb/xxxxx/v2ray-json
+    # subscriptionUrl уже содержит полный рабочий endpoint.
+    # Например:
+    # https://access.bosx.net/subb/f312e7aa636956a0b50b/v2ray-json
 
-real_sub_url = sub_url.strip()
+    real_sub_url = sub_url.strip()
 
-print(
-    "\n[+] Subscription endpoint:"
-)
+    print(
+        "\n[+] Subscription endpoint:"
+    )
 
-print(
-    real_sub_url
-)
+    print(
+        real_sub_url
+    )
 
     # ========================================================
     # HAPP SUBSCRIPTION
