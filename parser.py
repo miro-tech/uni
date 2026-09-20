@@ -1432,7 +1432,26 @@ def main():
                     client_id,
 
                 "hwid":
-                    hwid
+                    hwid,
+
+                # ====================================================
+                # DEVICE INFO
+                # ====================================================
+
+                "platform":
+                    "android",
+
+                "osVersion":
+                    "14",
+
+                "appVersion":
+                    "4.1.0",
+
+                "deviceModel":
+                    "Pixel 7",
+
+                "manufacturer":
+                    "Google"
             },
 
             timeout=30
