@@ -34,18 +34,6 @@ HAPP_USER_AGENT = "Happ/4.1.0/Android/17860741775021899610"
 
 
 # ============================================================
-# GITVERSE CONFIG
-# ============================================================
-
-GITVERSE_API = "https://api.gitverse.ru"
-
-GITVERSE_OWNER = "mirgittech"
-GITVERSE_REPO = "bos"
-GITVERSE_BRANCH = "master"
-GITVERSE_FILE = "configs.txt"
-
-
-# ============================================================
 # DNS CACHE
 # ============================================================
 
@@ -230,10 +218,7 @@ def make_vless(outbound, remark):
 
     if security == "tls":
 
-        # SNI -> rbc.ru
         params["sni"] = NEW_SNI
-
-        # ALPN намеренно НЕ добавляем
 
         fingerprint = tls.get(
             "fingerprint"
@@ -276,8 +261,6 @@ def make_vless(outbound, remark):
                 )
 
                 if host:
-
-                    # Оригинальный WS Host сохраняем
                     params["host"] = host
 
     # --------------------------------------------------------
@@ -357,7 +340,6 @@ def make_vless(outbound, remark):
             if host:
                 params["host"] = host
 
-            # Сохраняем полный extra
             extra = xhttp.get(
                 "extra"
             )
@@ -541,7 +523,7 @@ def make_hysteria(outbound, remark):
         "insecure": "0"
     }
 
-    # ALPN намеренно НЕ добавляем
+    # ALPN intentionally not added
 
     # --------------------------------------------------------
     # OBFUSCATION
@@ -1069,276 +1051,6 @@ def save_to_gist(content):
 
 
 # ============================================================
-# GITVERSE
-# ============================================================
-
-def save_to_gitverse(content):
-
-    token = os.getenv(
-        "GITVERSE_TOKEN"
-    )
-
-    if not token:
-
-        print(
-            "\n[!] GITVERSE_TOKEN не задан."
-        )
-
-        return False
-
-    headers = {
-        "Authorization":
-            f"Bearer {token}",
-
-        "Accept":
-            "application/vnd.gitverse.object+json;version=latest",
-
-        "Content-Type":
-            "application/json"
-    }
-
-    # --------------------------------------------------------
-    # GET CURRENT FILE
-    # --------------------------------------------------------
-
-    file_url = (
-        f"{GITVERSE_API}/repos/"
-        f"{GITVERSE_OWNER}/"
-        f"{GITVERSE_REPO}/contents/"
-        f"{GITVERSE_FILE}"
-    )
-
-    print(
-        "\n=================================================="
-    )
-
-    print(
-        "                 GITVERSE"
-    )
-
-    print(
-        "=================================================="
-    )
-
-    print(
-        "[*] Получаем текущий SHA..."
-    )
-
-    try:
-
-        response = requests.get(
-            file_url,
-            params={
-                "ref":
-                    GITVERSE_BRANCH,
-
-                "scope":
-                    "fast"
-            },
-            headers=headers,
-            timeout=30
-        )
-
-    except Exception as e:
-
-        print(
-            "[-] GitVerse GET error:",
-            e
-        )
-
-        return False
-
-    print(
-        "[+] GitVerse GET:",
-        response.status_code
-    )
-
-    # --------------------------------------------------------
-    # EXISTING FILE
-    # --------------------------------------------------------
-
-    sha = None
-
-    if response.status_code == 200:
-
-        try:
-
-            file_data = response.json()
-
-        except Exception as e:
-
-            print(
-                "[-] GitVerse JSON error:",
-                e
-            )
-
-            print(
-                response.text[:3000]
-            )
-
-            return False
-
-        sha = file_data.get(
-            "sha"
-        )
-
-        print(
-            "[+] Existing SHA:",
-            sha
-        )
-
-    # --------------------------------------------------------
-    # FILE DOES NOT EXIST
-    # --------------------------------------------------------
-
-    elif response.status_code == 404:
-
-        print(
-            "[+] configs.txt ещё не существует."
-        )
-
-        print(
-            "[+] Будет создан новый файл."
-        )
-
-    else:
-
-        print(
-            "[-] GitVerse GET error:",
-            response.status_code
-        )
-
-        print(
-            response.text[:5000]
-        )
-
-        return False
-
-    # --------------------------------------------------------
-    # BASE64
-    # --------------------------------------------------------
-
-    encoded_content = (
-        base64.b64encode(
-            content.encode("utf-8")
-        )
-        .decode("ascii")
-    )
-
-    payload = {
-        "content":
-            encoded_content,
-
-        "message":
-            "Auto-update BoSVPN configs",
-
-        "branch":
-            GITVERSE_BRANCH
-    }
-
-    # SHA требуется только для UPDATE
-    if sha:
-
-        payload["sha"] = sha
-
-    # --------------------------------------------------------
-    # PUT
-    # --------------------------------------------------------
-
-    print(
-        "[*] Отправляем configs.txt в GitVerse..."
-    )
-
-    try:
-
-        response = requests.put(
-            file_url,
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-
-    except Exception as e:
-
-        print(
-            "[-] GitVerse PUT error:",
-            e
-        )
-
-        return False
-
-    print(
-        "[+] GitVerse PUT:",
-        response.status_code
-    )
-
-    # --------------------------------------------------------
-    # SUCCESS
-    # --------------------------------------------------------
-
-    if response.status_code in {
-        200,
-        201
-    }:
-
-        try:
-
-            data = response.json()
-
-        except Exception:
-
-            data = {}
-
-        commit = data.get(
-            "commit",
-            {}
-        )
-
-        new_sha = commit.get(
-            "sha",
-            ""
-        )
-
-        print(
-            "[+] GitVerse успешно обновлён!"
-        )
-
-        if new_sha:
-
-            print(
-                "[+] Commit SHA:",
-                new_sha
-            )
-
-        print(
-            "[+] GitVerse:"
-        )
-
-        print(
-            "https://gitverse.ru/"
-            "mirgittech/bos/raw/"
-            "branch/master/configs.txt"
-        )
-
-        return True
-
-    # --------------------------------------------------------
-    # ERROR
-    # --------------------------------------------------------
-
-    print(
-        "[-] GitVerse PUT error:",
-        response.status_code
-    )
-
-    print(
-        response.text[:5000]
-    )
-
-    return False
-
-
-# ============================================================
 # MAIN
 # ============================================================
 
@@ -1433,10 +1145,6 @@ def main():
 
                 "hwid":
                     hwid,
-
-                # ====================================================
-                # DEVICE INFO
-                # ====================================================
 
                 "platform":
                     "android",
@@ -1547,13 +1255,9 @@ def main():
         sub_url
     )
 
-        # ========================================================
+    # ========================================================
     # SUBSCRIPTION ENDPOINT
     # ========================================================
-
-    # subscriptionUrl уже содержит полный рабочий endpoint.
-    # Например:
-    # https://access.bosx.net/subb/f312e7aa636956a0b50b/v2ray-json
 
     real_sub_url = sub_url.strip()
 
@@ -1900,14 +1604,6 @@ def main():
     # ========================================================
 
     save_to_gist(
-        final_content
-    )
-
-    # ========================================================
-    # GITVERSE
-    # ========================================================
-
-    save_to_gitverse(
         final_content
     )
 
