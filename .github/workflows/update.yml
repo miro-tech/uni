@@ -29,7 +29,6 @@ jobs:
         env:
           MY_TOKEN: ${{ secrets.MY_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
-          GITVERSE_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
           echo "========================================"
           echo "Running parser.py"
