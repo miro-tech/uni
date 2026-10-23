@@ -1,70 +1,29 @@
-name: BoSVPN Update
+name: Update Uni VPN VLESS Gist
 
 on:
+  schedule:
+    - cron: "0 0,12 * * *"
   workflow_dispatch:
 
-  schedule:
-    - cron: "0 8,20 * * *"
+permissions:
+  contents: read
+
+concurrency:
+  group: univpn-vless-gist
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests brotli
-
-      - name: Run parser.py
+      - name: Update VLESS subscription
         env:
-          MY_TOKEN: ${{ secrets.MY_TOKEN }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
-        run: |
-          echo "========================================"
-          echo "Running parser.py"
-          echo "========================================"
-
-          python parser.py
-
-      - name: Check configs.txt
-        run: |
-          echo "========================================"
-          echo "Checking configs.txt"
-          echo "========================================"
-
-          if [ ! -f configs.txt ]; then
-            echo "ERROR: configs.txt was not created!"
-            exit 1
-          fi
-
-          echo "[+] configs.txt exists"
-
-          echo ""
-          echo "Size:"
-          wc -c configs.txt
-
-          echo ""
-          echo "Lines:"
-          wc -l configs.txt
-
-          echo ""
-          echo "VLESS:"
-          grep -c '^vless://' configs.txt || true
-
-          echo ""
-          echo "Hysteria2:"
-          grep -c '^hysteria2://' configs.txt || true
-
-          echo ""
-          echo "Content:"
-          cat configs.txt
+          GIST_FILENAME: univpn_vless.txt
+        run: python3 univpn.py
