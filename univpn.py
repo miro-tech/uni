@@ -1,12 +1,13 @@
 
 #!/usr/bin/env python3
-"""Uni VPN: create a fresh account on every run and publish VLESS URIs to GitHub Gist."""
+"""Uni VPN: create a fresh account and publish VLESS URIs to GitHub Gist."""
 
 import json
 import os
 import ssl
 import sys
 import uuid
+import copy
 import urllib.error
 import urllib.request
 from urllib.parse import quote, urlencode
@@ -16,7 +17,6 @@ GITHUB_API = "https://api.github.com"
 PKG = "com.univconn.and"
 CTX = ssl.create_default_context()
 
-# Последние октеты IP для каждой создаваемой ссылки.
 IP_LAST_OCTETS = (14, 12, 8)
 
 
@@ -85,7 +85,8 @@ def build_vless_uris(node, ep, creds):
     transport = ep.get("transport") or "tcp"
     sni = ep.get("server_name") or host
 
-    params = {
+    # Создаём параметры один раз для данного endpoint.
+    base_params = {
         "encryption": "none",
         "security": (
             "reality" if security == "reality" else "tls"
@@ -100,30 +101,33 @@ def build_vless_uris(node, ep, creds):
     # REALITY
     if security == "reality":
         if ep.get("reality_public_key"):
-            params["pbk"] = ep["reality_public_key"]
+            base_params["pbk"] = ep["reality_public_key"]
 
         if ep.get("reality_short_id"):
-            params["sid"] = ep["reality_short_id"]
+            base_params["sid"] = ep["reality_short_id"]
 
-        params["fp"] = (
-            ep.get("utls_fingerprint") or "chrome"
-        )
+        fingerprint = ep.get("utls_fingerprint")
+
+        if fingerprint:
+            base_params["fp"] = fingerprint
 
     # FLOW
     if ep.get("flow"):
-        params["flow"] = ep["flow"]
+        base_params["flow"] = ep["flow"]
 
     # WEBSOCKET
     if transport in ("ws", "websocket"):
         if ep.get("ws_path"):
-            params["path"] = ep["ws_path"]
+            base_params["path"] = ep["ws_path"]
 
         if ep.get("ws_host"):
-            params["host"] = ep["ws_host"]
+            base_params["host"] = ep["ws_host"]
+
+    # Фиксируем параметры, чтобы все IP имели одинаковые значения.
+    fixed_params = copy.deepcopy(base_params)
 
     uris = []
 
-    # Создаём три варианта IP.
     for last_octet in IP_LAST_OCTETS:
         new_host = ".".join(
             parts[:3] + [str(last_octet)]
@@ -137,7 +141,7 @@ def build_vless_uris(node, ep, creds):
         uri = (
             f"vless://{quote(str(uid), safe='')}@"
             f"{new_host}:{port}"
-            f"?{urlencode(params)}"
+            f"?{urlencode(copy.deepcopy(fixed_params))}"
             f"#{quote(tag, safe='')}"
         )
 
@@ -236,7 +240,7 @@ def main():
         body={"protocol": "vless"},
     )
 
-    # Формируем три ссылки на каждый endpoint.
+    # Генерируем три ссылки на каждый endpoint.
     uris = []
 
     for node, ep in endpoints:
