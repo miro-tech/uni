@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """Uni VPN: create a fresh account on every run and publish VLESS URIs to GitHub Gist."""
 
@@ -15,6 +16,9 @@ GITHUB_API = "https://api.github.com"
 PKG = "com.univconn.and"
 CTX = ssl.create_default_context()
 
+# Последние октеты IP для каждой создаваемой ссылки.
+IP_LAST_OCTETS = (14, 12, 8)
+
 
 def http(url, method="GET", headers=None, body=None, timeout=25):
     h = dict(headers or {})
@@ -29,79 +33,138 @@ def http(url, method="GET", headers=None, body=None, timeout=25):
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=CTX) as resp:
+        with urllib.request.urlopen(
+            req, timeout=timeout, context=CTX
+        ) as resp:
             raw = resp.read()
             return resp.status, json.loads(raw) if raw else {}
+
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8", "replace")
+
         try:
             detail = json.loads(raw)
         except Exception:
             detail = raw[:500]
+
         raise RuntimeError(
             f"HTTP {e.code} {url}: {detail}"
         ) from e
 
 
-def build_vless_uri(node, ep, creds):
+def build_vless_uris(node, ep, creds):
     if ep.get("protocol") != "vless":
-        return None
+        return []
 
     host = ep.get("server")
     port = ep.get("server_port")
     uid = creds.get("credential")
 
     if not host or not port or not uid:
-        return None
+        return []
+
+    # Проверяем IPv4.
+    parts = str(host).split(".")
+
+    if len(parts) != 4:
+        return []
+
+    try:
+        if not all(
+            p.isdigit() and 0 <= int(p) <= 255
+            for p in parts
+        ):
+            return []
+    except (ValueError, TypeError):
+        return []
 
     name = node.get("name") or "node"
     eid = ep.get("id", "")
+
     security = ep.get("security") or "tls"
     transport = ep.get("transport") or "tcp"
     sni = ep.get("server_name") or host
 
     params = {
         "encryption": "none",
-        "security": "reality" if security == "reality" else "tls",
-        "type": "ws" if transport in ("ws", "websocket") else transport,
+        "security": (
+            "reality" if security == "reality" else "tls"
+        ),
+        "type": (
+            "ws" if transport in ("ws", "websocket")
+            else transport
+        ),
         "sni": sni,
     }
 
+    # REALITY
     if security == "reality":
         if ep.get("reality_public_key"):
             params["pbk"] = ep["reality_public_key"]
+
         if ep.get("reality_short_id"):
             params["sid"] = ep["reality_short_id"]
-        params["fp"] = ep.get("utls_fingerprint") or "chrome"
 
+        params["fp"] = (
+            ep.get("utls_fingerprint") or "chrome"
+        )
+
+    # FLOW
     if ep.get("flow"):
         params["flow"] = ep["flow"]
 
+    # WEBSOCKET
     if transport in ("ws", "websocket"):
         if ep.get("ws_path"):
             params["path"] = ep["ws_path"]
+
         if ep.get("ws_host"):
             params["host"] = ep["ws_host"]
 
-    tag = f"{name}-vless-{security}-{transport}-{eid}"
+    uris = []
 
-    return (
-        f"vless://{quote(str(uid), safe='')}@{host}:{port}"
-        f"?{urlencode(params)}#{quote(tag, safe='')}"
-    )
+    # Создаём три варианта IP.
+    for last_octet in IP_LAST_OCTETS:
+        new_host = ".".join(
+            parts[:3] + [str(last_octet)]
+        )
+
+        tag = (
+            f"{name}-vless-{security}-"
+            f"{transport}-{eid}-{last_octet}"
+        )
+
+        uri = (
+            f"vless://{quote(str(uid), safe='')}@"
+            f"{new_host}:{port}"
+            f"?{urlencode(params)}"
+            f"#{quote(tag, safe='')}"
+        )
+
+        uris.append(uri)
+
+    return uris
 
 
 def main():
-    gist_token = os.environ.get("GIST_TOKEN", "").strip()
-    gist_id = os.environ.get("GIST_ID", "").strip()
+    gist_token = os.environ.get(
+        "GIST_TOKEN", ""
+    ).strip()
+
+    gist_id = os.environ.get(
+        "GIST_ID", ""
+    ).strip()
+
     filename = os.environ.get(
         "GIST_FILENAME", "univpn_vless.txt"
     ).strip()
 
     if not gist_token or not gist_id:
-        raise SystemExit("Missing GIST_TOKEN or GIST_ID secrets")
+        raise SystemExit(
+            "Missing GIST_TOKEN or GIST_ID secrets"
+        )
 
-    # Create a fresh account and random HWID on every run.
+    # Новый HWID при каждом запуске.
     hwid = uuid.uuid4().hex
 
     headers = {
@@ -128,13 +191,17 @@ def main():
     )
 
     access_key = account.get("access_key")
+
     if not access_key:
-        raise RuntimeError("Account response has no access_key")
+        raise RuntimeError(
+            "Account response has no access_key"
+        )
 
     headers["X-Access-Key"] = access_key
+
     print("[+] Account created")
 
-    # Fetch the complete node directory.
+    # Получаем полный каталог серверов.
     print("[*] Fetching node directory")
 
     _, directory = http(
@@ -159,7 +226,7 @@ def main():
             "No VLESS endpoints; existing Gist left unchanged"
         )
 
-    # Request only VLESS credentials.
+    # Запрашиваем credentials только для VLESS.
     print("[*] Requesting VLESS credentials")
 
     _, creds = http(
@@ -169,13 +236,17 @@ def main():
         body={"protocol": "vless"},
     )
 
+    # Формируем три ссылки на каждый endpoint.
     uris = []
-    for node, ep in endpoints:
-        uri = build_vless_uri(node, ep, creds)
-        if uri:
-            uris.append(uri)
 
-    # Remove duplicates while preserving order.
+    for node, ep in endpoints:
+        generated = build_vless_uris(
+            node, ep, creds
+        )
+
+        uris.extend(generated)
+
+    # Удаляем дубликаты, сохраняя порядок.
     uris = list(dict.fromkeys(uris))
 
     if not uris:
@@ -185,13 +256,15 @@ def main():
 
     content = "\n".join(uris) + "\n"
 
-    # Update the existing Gist, preserving its URL.
+    # Обновляем существующий Gist.
     gist_headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {gist_token}",
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "UniVPN-VLESS-Updater",
     }
+
+    print("[*] Updating GitHub Gist")
 
     _, result = http(
         f"{GITHUB_API}/gists/{gist_id}",
@@ -207,7 +280,9 @@ def main():
     )
 
     print("[+] Gist updated")
-    print(f"[+] VLESS links: {len(uris)}")
+    print(f"[+] Original VLESS endpoints: {len(endpoints)}")
+    print(f"[+] IP variants per endpoint: {len(IP_LAST_OCTETS)}")
+    print(f"[+] Total VLESS links: {len(uris)}")
     print(f"[+] File: {filename}")
     print(f"[+] URL: {result.get('html_url', '')}")
 
