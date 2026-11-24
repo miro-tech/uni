@@ -17,7 +17,7 @@ GITHUB_API = "https://api.github.com"
 PKG = "com.univconn.and"
 CTX = ssl.create_default_context()
 
-IP_LAST_OCTETS = (14, 12, 8)
+IP_LAST_OCTETS = (4, 9, 7, 11)
 
 
 def http(url, method="GET", headers=None, body=None, timeout=25):
